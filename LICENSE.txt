@@ -1,0 +1,78 @@
+LICENCE
+=======
+
+This template is sold as source code. The licence you received at the time of
+purchase governs your use of it, and it takes precedence over everything in
+this file.
+
+If you bought it through a marketplace, that marketplace's licence terms apply.
+Marketplaces normally offer two tiers, along these lines:
+
+  Regular / Single Application Licence
+    Use the source code in ONE end product.
+    The end product may be used by you or one client.
+    The end product may not itself be sold as a template or source code.
+
+  Extended / Multi Application Licence
+    Use the source code in multiple end products.
+    End users may be charged for access to the end product.
+    The end product may still not be resold as a template or source code.
+
+Under either tier, redistributing the source code itself — as a template, a
+starter kit, or a repository — is normally prohibited.
+
+
+IF YOU ARE THE SELLER
+---------------------
+
+Selling through a marketplace? Its terms cover the sale and this file needs no
+change.
+
+Selling direct — from your own site, or as a private hand-off — replace the
+section above with your own terms, since no marketplace licence is attached to
+that sale. This file is a starting point, not legal advice; have a lawyer look
+at your terms if the amounts involved warrant it.
+
+
+THIRD-PARTY DEPENDENCIES
+------------------------
+
+This template depends on open-source packages that keep their own licences.
+These are not covered by whatever licence you apply above, and all of the
+following permit commercial use and redistribution as part of a larger work:
+
+  Next.js .......................... MIT
+  React, React DOM ................. MIT
+  Tailwind CSS ..................... MIT
+  Prisma, @prisma/client ........... Apache-2.0
+  lucide-react (icons) ............. ISC
+  bcryptjs ......................... MIT
+  jose ............................. MIT
+  zod .............................. MIT
+  clsx, tailwind-merge ............. MIT
+  TypeScript ....................... Apache-2.0
+
+Run `npx license-checker --summary` for the complete, current list including
+transitive dependencies.
+
+
+ASSETS
+------
+
+This template contains no stock photography, no purchased fonts, and no
+third-party brand assets. All icons come from lucide-react (ISC). Typography
+uses the system font stack. Every graphic is drawn in code.
+
+Nothing here requires an asset licence you do not already have.
+
+
+NO WARRANTY
+-----------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

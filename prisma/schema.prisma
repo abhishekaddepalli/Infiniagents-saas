@@ -1,0 +1,735 @@
+// ---------------------------------------------------------------------------
+// AgentFlow AI — Prisma schema
+// Database: PostgreSQL
+//
+// Ownership model
+// ---------------
+// Everything a customer creates belongs to a WORKSPACE, not directly to a user.
+// Every account gets a personal workspace on registration, and can be invited
+// into others. This is what makes team collaboration possible without a second
+// data model. When you read a query in this codebase, the security filter you
+// should expect to see is `workspaceId`.
+//
+// Run `npm run db:migrate` after editing this file.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------ enums --------------------------------------
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+/// Role inside one workspace. Distinct from the platform-wide `Role` above.
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum AgentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AutomationStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+}
+
+enum TriggerType {
+  MANUAL
+  WEBHOOK
+  SCHEDULE
+}
+
+enum NodeType {
+  TRIGGER
+  AI_AGENT
+  CONDITION
+  TEXT_INPUT
+  HTTP_REQUEST
+  DELAY
+  OUTPUT
+  TRANSFORM
+  KNOWLEDGE_SEARCH
+  SEND_EMAIL
+}
+
+enum ExecutionStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ExecutionSource {
+  MANUAL
+  WEBHOOK
+  SCHEDULE
+  PLAYGROUND
+  API
+}
+
+enum Provider {
+  OPENAI
+  GEMINI
+  ANTHROPIC
+}
+
+enum TemplateStatus {
+  PUBLISHED
+  DRAFT
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+enum TokenType {
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum InvoiceStatus {
+  PAID
+  OPEN
+  FAILED
+  REFUNDED
+}
+
+// ------------------------------ users --------------------------------------
+
+model User {
+  id              String     @id @default(cuid())
+  name            String
+  email           String     @unique
+  passwordHash    String     @map("password_hash")
+  image           String?
+  role            Role       @default(USER)
+  status          UserStatus @default(ACTIVE)
+  isDemo          Boolean    @default(false) @map("is_demo")
+  theme           String     @default("system")
+  emailVerifiedAt DateTime?  @map("email_verified_at")
+  /// The workspace to reopen on the user's next sign-in.
+  lastWorkspaceId String?    @map("last_workspace_id")
+  onboardedAt     DateTime?  @map("onboarded_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  ownedWorkspaces Workspace[]           @relation("WorkspaceOwner")
+  memberships     WorkspaceMember[]
+  invitesSent     WorkspaceInvitation[] @relation("InvitedBy")
+  conversations   Conversation[]
+  executions      Execution[]
+  usage           AiUsage[]
+  tokens          VerificationToken[]
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+  createdAgents   Agent[]               @relation("AgentCreatedBy")
+  createdKeys     ApiKey[]              @relation("ApiKeyCreatedBy")
+
+  @@map("users")
+}
+
+/// Password reset and email verification tokens. Only the SHA-256 hash is
+/// stored, so a database leak cannot be replayed.
+model VerificationToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  type      TokenType
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("verification_tokens")
+}
+
+// ---------------------------- workspaces -----------------------------------
+
+model Workspace {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  image      String?
+  ownerId    String   @map("owner_id")
+  /// A personal workspace is created automatically and cannot be deleted.
+  isPersonal Boolean  @default(false) @map("is_personal")
+  isDemo     Boolean  @default(false) @map("is_demo")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  owner          User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members        WorkspaceMember[]
+  invitations    WorkspaceInvitation[]
+  agents         Agent[]
+  automations    Automation[]
+  conversations  Conversation[]
+  executions     Execution[]
+  usage          AiUsage[]
+  providerKeys   ProviderKey[]
+  apiKeys        ApiKey[]
+  knowledgeBases KnowledgeBase[]
+  subscription   Subscription?
+  invoices       Invoice[]
+  auditLogs      AuditLog[]
+
+  @@index([ownerId])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  userId      String        @map("user_id")
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model WorkspaceInvitation {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  email       String
+  role        WorkspaceRole @default(MEMBER)
+  tokenHash   String        @unique @map("token_hash")
+  invitedById String        @map("invited_by_id")
+  expiresAt   DateTime      @map("expires_at")
+  acceptedAt  DateTime?     @map("accepted_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, email])
+  @@index([email])
+  @@map("workspace_invitations")
+}
+
+/// Per-workspace AI provider credentials, encrypted at rest (AES-256-GCM,
+/// see src/lib/crypto.ts). Only `keyHint` is ever exposed to the browser.
+model ProviderKey {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  provider    Provider
+  keyCipher   String    @map("key_cipher")
+  keyHint     String    @map("key_hint")
+  verifiedAt  DateTime? @map("verified_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, provider])
+  @@map("provider_keys")
+}
+
+/// A key for the public REST API (/api/v1). Only the hash is stored; the full
+/// key is shown to the user exactly once, at creation.
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  name        String
+  keyHash     String    @unique @map("key_hash")
+  /// The visible prefix, e.g. "af_live_a1b2c3" — enough to identify a key.
+  keyPrefix   String    @map("key_prefix")
+  /// Any of: agents:read, agents:write, chat:write, automations:read,
+  /// automations:run, executions:read
+  scopes      String[]  @default([])
+  createdById String    @map("created_by_id")
+  lastUsedAt  DateTime? @map("last_used_at")
+  expiresAt   DateTime? @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("ApiKeyCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("api_keys")
+}
+
+// ------------------------------ agents -------------------------------------
+
+model Agent {
+  id              String      @id @default(cuid())
+  workspaceId     String      @map("workspace_id")
+  createdById     String?     @map("created_by_id")
+  name            String
+  description     String      @default("")
+  icon            String      @default("bot")
+  provider        Provider    @default(OPENAI)
+  model           String
+  systemPrompt    String      @map("system_prompt")
+  temperature     Float       @default(0.7)
+  maxTokens       Int         @default(1024) @map("max_tokens")
+  welcomeMessage  String      @default("") @map("welcome_message")
+  memoryEnabled   Boolean     @default(true) @map("memory_enabled")
+  /// When set, the agent retrieves context from this knowledge base (RAG).
+  knowledgeBaseId String?     @map("knowledge_base_id")
+  status          AgentStatus @default(ACTIVE)
+  isDemo          Boolean     @default(false) @map("is_demo")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User?            @relation("AgentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  knowledgeBase KnowledgeBase?   @relation(fields: [knowledgeBaseId], references: [id], onDelete: SetNull)
+  conversations Conversation[]
+  nodes         AutomationNode[]
+  executions    Execution[]
+  usage         AiUsage[]
+
+  @@index([workspaceId])
+  @@map("agents")
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  /// Null for conversations started through the public API, which has no
+  /// signed-in user — the workspace still owns them.
+  userId      String?  @map("user_id")
+  agentId     String   @map("agent_id")
+  title       String   @default("New conversation")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  agent     Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([agentId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  role           String // "user" | "assistant" | "system"
+  content        String
+  /// Knowledge base chunks used to answer, for citation display.
+  sources        Json     @default("[]")
+  inputTokens    Int      @default(0) @map("input_tokens")
+  outputTokens   Int      @default(0) @map("output_tokens")
+  costUsd        Float    @default(0) @map("cost_usd")
+  latencyMs      Int      @default(0) @map("latency_ms")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+// --------------------------- knowledge base --------------------------------
+
+model KnowledgeBase {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  name              String
+  description       String   @default("")
+  /// Provider and model used to embed this base's chunks. Mixing embedding
+  /// models within one base makes similarity meaningless, so it is fixed here.
+  embeddingProvider Provider @default(OPENAI) @map("embedding_provider")
+  embeddingModel    String   @default("text-embedding-3-small") @map("embedding_model")
+  isDemo            Boolean  @default(false) @map("is_demo")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  documents Document[]
+  chunks    DocumentChunk[]
+  agents    Agent[]
+
+  @@index([workspaceId])
+  @@map("knowledge_bases")
+}
+
+model Document {
+  id              String         @id @default(cuid())
+  knowledgeBaseId String         @map("knowledge_base_id")
+  name            String
+  mimeType        String         @default("text/plain") @map("mime_type")
+  sizeBytes       Int            @default(0) @map("size_bytes")
+  status          DocumentStatus @default(PENDING)
+  error           String?
+  chunkCount      Int            @default(0) @map("chunk_count")
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  knowledgeBase KnowledgeBase   @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  chunks        DocumentChunk[]
+
+  @@index([knowledgeBaseId])
+  @@map("documents")
+}
+
+/// One embedded slice of a document.
+///
+/// Embeddings are stored as a plain float array and compared in application
+/// code (see src/lib/knowledge/search.ts). That keeps the template installable
+/// on any stock PostgreSQL. For large corpora, switch to the pgvector
+/// extension — documentation/knowledge-base.md explains the migration.
+model DocumentChunk {
+  id              String   @id @default(cuid())
+  documentId      String   @map("document_id")
+  knowledgeBaseId String   @map("knowledge_base_id")
+  index           Int
+  content         String
+  embedding       Float[]
+  tokens          Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  document      Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+
+  @@index([knowledgeBaseId])
+  @@index([documentId])
+  @@map("document_chunks")
+}
+
+// ---------------------------- automations ----------------------------------
+
+model Automation {
+  id          String           @id @default(cuid())
+  workspaceId String           @map("workspace_id")
+  name        String
+  description String           @default("")
+  triggerType TriggerType      @default(MANUAL) @map("trigger_type")
+  webhookKey  String?          @unique @map("webhook_key")
+  schedule    String? // cron expression, read by the scheduler runner
+  timezone    String           @default("UTC")
+  lastRunAt   DateTime?        @map("last_run_at")
+  status      AutomationStatus @default(DRAFT)
+  isDemo      Boolean          @default(false) @map("is_demo")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  workspace   Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  nodes       AutomationNode[]
+  connections AutomationConnection[]
+  executions  Execution[]
+
+  @@index([workspaceId])
+  @@map("automations")
+}
+
+model AutomationNode {
+  id           String   @id @default(cuid())
+  automationId String   @map("automation_id")
+  type         NodeType
+  label        String
+  /// Node-type specific configuration (prompt, url, seconds, operator...).
+  config       Json     @default("{}")
+  positionX    Float    @default(0) @map("position_x")
+  positionY    Float    @default(0) @map("position_y")
+  agentId      String?  @map("agent_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  automation Automation             @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  agent      Agent?                 @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  outgoing   AutomationConnection[] @relation("SourceNode")
+  incoming   AutomationConnection[] @relation("TargetNode")
+
+  @@index([automationId])
+  @@map("automation_nodes")
+}
+
+model AutomationConnection {
+  id           String   @id @default(cuid())
+  automationId String   @map("automation_id")
+  sourceId     String   @map("source_id")
+  targetId     String   @map("target_id")
+  /// For CONDITION nodes: "true" | "false". Null for a plain edge.
+  branch       String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  automation Automation     @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  source     AutomationNode @relation("SourceNode", fields: [sourceId], references: [id], onDelete: Cascade)
+  target     AutomationNode @relation("TargetNode", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+  @@map("automation_connections")
+}
+
+// ---------------------------- executions -----------------------------------
+
+model Execution {
+  id           String          @id @default(cuid())
+  workspaceId  String          @map("workspace_id")
+  userId       String?         @map("user_id")
+  automationId String?         @map("automation_id")
+  agentId      String?         @map("agent_id")
+  status       ExecutionStatus @default(RUNNING)
+  source       ExecutionSource @default(MANUAL)
+  input        String          @default("")
+  output       String          @default("")
+  error        String?
+  /// Per-node trace: [{ nodeId, label, type, status, output, ms }]
+  steps        Json            @default("[]")
+  inputTokens  Int             @default(0) @map("input_tokens")
+  outputTokens Int             @default(0) @map("output_tokens")
+  costUsd      Float           @default(0) @map("cost_usd")
+  durationMs   Int             @default(0) @map("duration_ms")
+  startedAt    DateTime        @default(now()) @map("started_at")
+  finishedAt   DateTime?       @map("finished_at")
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  automation Automation? @relation(fields: [automationId], references: [id], onDelete: SetNull)
+  agent      Agent?      @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([automationId])
+  @@index([startedAt])
+  @@map("executions")
+}
+
+/// One row per AI request. Everything on the Usage page aggregates from here.
+model AiUsage {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  userId       String?  @map("user_id")
+  agentId      String?  @map("agent_id")
+  provider     Provider
+  model        String
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  costUsd      Float    @default(0) @map("cost_usd")
+  latencyMs    Int      @default(0) @map("latency_ms")
+  source       String   @default("playground")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  agent     Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@map("ai_usage")
+}
+
+// ------------------------- admin-managed catalog ---------------------------
+
+/// Admin-managed model catalog. Prices live here, never in code, because
+/// provider pricing changes. Costs are USD per 1,000,000 tokens.
+model AiModel {
+  id             String   @id @default(cuid())
+  provider       Provider
+  name           String
+  modelId        String   @map("model_id")
+  /// Embedding models are offered for knowledge bases, not for agents.
+  kind           String   @default("chat")
+  inputCostPerM  Float    @default(0) @map("input_cost_per_m")
+  outputCostPerM Float    @default(0) @map("output_cost_per_m")
+  maxTokens      Int      @default(4096) @map("max_tokens")
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([provider, modelId])
+  @@map("ai_models")
+}
+
+model AgentTemplate {
+  id             String         @id @default(cuid())
+  name           String
+  slug           String         @unique
+  description    String
+  category       String
+  icon           String         @default("sparkles")
+  systemPrompt   String         @map("system_prompt")
+  provider       Provider       @default(OPENAI)
+  model          String
+  temperature    Float          @default(0.7)
+  maxTokens      Int            @default(1024) @map("max_tokens")
+  welcomeMessage String         @default("") @map("welcome_message")
+  status         TemplateStatus @default(PUBLISHED)
+  featured       Boolean        @default(false)
+  usageCount     Int            @default(0) @map("usage_count")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  @@map("agent_templates")
+}
+
+model Prompt {
+  id        String   @id @default(cuid())
+  title     String
+  category  String
+  body      String
+  tags      String[] @default([])
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("prompts")
+}
+
+// -------------------------- plans & billing --------------------------------
+
+model Plan {
+  id                    String   @id @default(cuid())
+  name                  String
+  slug                  String   @unique
+  description           String   @default("")
+  priceMonthly          Float    @default(0) @map("price_monthly")
+  priceYearly           Float    @default(0) @map("price_yearly")
+  /// -1 means unlimited.
+  maxAgents             Int      @default(3) @map("max_agents")
+  maxRequests           Int      @default(100) @map("max_requests")
+  maxAutomations        Int      @default(1) @map("max_automations")
+  maxMembers            Int      @default(1) @map("max_members")
+  maxDocuments          Int      @default(10) @map("max_documents")
+  features              String[] @default([])
+  highlighted           Boolean  @default(false)
+  sortOrder             Int      @default(0) @map("sort_order")
+  active                Boolean  @default(true)
+  /// Gateway price identifiers, set in Admin → Plans once you create the
+  /// matching products in Stripe or Razorpay.
+  stripePriceMonthlyId  String?  @map("stripe_price_monthly_id")
+  stripePriceYearlyId   String?  @map("stripe_price_yearly_id")
+  razorpayPlanMonthlyId String?  @map("razorpay_plan_monthly_id")
+  razorpayPlanYearlyId  String?  @map("razorpay_plan_yearly_id")
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  workspaceId        String             @unique @map("workspace_id")
+  planId             String             @map("plan_id")
+  status             SubscriptionStatus @default(ACTIVE)
+  /// "none" until a payment gateway is connected.
+  gateway            String             @default("none")
+  externalId         String?            @map("external_id")
+  externalCustomerId String?            @map("external_customer_id")
+  interval           String             @default("monthly")
+  cancelAtPeriodEnd  Boolean            @default(false) @map("cancel_at_period_end")
+  currentPeriodStart DateTime           @default(now()) @map("current_period_start")
+  currentPeriodEnd   DateTime?          @map("current_period_end")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan      Plan      @relation(fields: [planId], references: [id])
+
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  workspaceId String        @map("workspace_id")
+  gateway     String
+  externalId  String?       @map("external_id")
+  number      String?
+  amount      Float         @default(0)
+  currency    String        @default("USD")
+  status      InvoiceStatus @default(PAID)
+  hostedUrl   String?       @map("hosted_url")
+  periodStart DateTime?     @map("period_start")
+  periodEnd   DateTime?     @map("period_end")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("invoices")
+}
+
+/// Records every gateway webhook already handled, so a redelivered event
+/// cannot grant a second subscription.
+model WebhookEvent {
+  id          String   @id @default(cuid())
+  gateway     String
+  externalId  String   @map("external_id")
+  type        String
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@unique([gateway, externalId])
+  @@map("webhook_events")
+}
+
+// ------------------------------- ops ---------------------------------------
+
+/// Append-only record of security- and billing-relevant actions.
+model AuditLog {
+  id          String   @id @default(cuid())
+  workspaceId String?  @map("workspace_id")
+  userId      String?  @map("user_id")
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  metadata    Json     @default("{}")
+  ip          String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  type      String    @default("info")
+  title     String
+  body      String    @default("")
+  link      String?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+/// Global key/value application settings, edited from the admin panel.
+/// Seeded in prisma/seed.ts — see src/lib/settings.ts for typed access.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
